@@ -9,9 +9,12 @@ import os
 import re
 import xml.etree.ElementTree as ET
 
-caseSearcher = re.compile(r'(\d+)-(\d+)')
+from ymd.img_utils.binary import binarize
+from ymd.align import HomographyTransform
 
 from name_map import NAME_MAP
+
+caseSearcher = re.compile(r'(\d+)-(\d+)')
 
 def test_directory(d):
     if ( not os.path.isdir(d) ):
@@ -253,7 +256,11 @@ def crop_target(img, bbox, targetShape=(128, 128)):
 
     return c
 
-def crop_item_and_save(d, index, item, imageDict ):
+def resize_and_binarize(img):
+    img = cv2.resize(img, (0, 0), fx=0.2, fy=0.2, interpolation=cv2.INTER_CUBIC)
+    return binarize(img, 80)
+
+def crop_item_and_save(d, index, item, imageDict, flagTransform=False ):
     '''
     Arguments:
     d (str): Output directory.
@@ -270,8 +277,23 @@ def crop_item_and_save(d, index, item, imageDict ):
     outDir = os.path.join( d, '%06d_%s' % (index, caseName) )
     test_directory(outDir)
 
-    for fn in imageDict[caseName]:
+    # Homography.
+    ht = HomographyTransform()
+
+    for i, fn in enumerate(imageDict[caseName]):
         img = cv2.imread(fn, cv2.IMREAD_UNCHANGED)
+        if ( i == 0 ):
+            img0 = img
+            if ( flagTransform ):
+                imgRB0 = resize_and_binarize(img0)
+        else:
+            if ( flagTransform ):
+                imgRB1 = resize_and_binarize(img)
+                h, m = ht.compute_homography( imgRB0, imgRB1, r=5 )
+                img = cv2.warpPerspective( 
+                    img, h, (img.shape[1], img.shape[0]), 
+                    flags=cv2.INTER_LINEAR )
+        
         c = crop_target(img, item['bbox'])
 
         stem = os.path.splitext(os.path.basename(fn))[0]
@@ -296,11 +318,14 @@ def handle_args():
     parser.add_argument('outdir', type=str, 
         help='The output directory. ')
 
-    parser.add_argument('--label-xml-pattern', type=str, default='outputs/**/*.xml', 
+    parser.add_argument('--label-xml-pattern', type=str, default='outputs/**/*-01.xml', 
         help='The search pattern for the labeled data. ')
 
     parser.add_argument('--image-pattern', type=str, default='*.jpg', 
         help='The search pattern for the images. ')
+
+    parser.add_argument('--transform', action='store_true', default=False, 
+        help='Set this flag to transform the images other than the first one. ')
 
     parser.add_argument('--np', type=int, default=2, \
         help='The process number. ')
@@ -350,7 +375,7 @@ def main():
         print(typeDict.items())
         return 0
     
-    poolArgs = [ [args.outdir, i, item, imageDict] for i, item in enumerate(itemList) ]
+    poolArgs = [ [args.outdir, i, item, imageDict, args.transform] for i, item in enumerate(itemList) ]
 
     if ( args.debug ):
         for i, item in enumerate(itemList):

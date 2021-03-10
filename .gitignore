@@ -7,3 +7,5 @@ Data/
 build/
 Build/
 *.code-workspace
+notebooks/
+Notebooks/
