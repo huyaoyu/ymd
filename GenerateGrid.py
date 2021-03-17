@@ -7,6 +7,8 @@ import numpy as np
 import os
 import re
 
+from ymd.img_utils.channel import (make_three_channels, merge_channels)
+
 def test_directory(d):
     if ( not os.path.isdir(d) ):
         os.makedirs(d)
@@ -30,10 +32,6 @@ def read_image(fn):
         '%s does not exist. ' % ( fn )
     img = cv2.imread( fn, cv2.IMREAD_UNCHANGED )
 
-    if ( img.ndim == 2 ):
-        img = np.expand_dims(img, axis=-1)
-        img = np.tile( img, ( 1, 1, 3 ) )
-
     return img
 
 def extract_name_from_fn(fn):
@@ -50,7 +48,7 @@ def read_and_compose_grid(files):
     H, W = img.shape[:2]
 
     # The canvas.
-    canvas = np.zeros( ( H * N, 3 * W, 3 ), dtype=np.uint8 )
+    canvas = np.zeros( ( H * N, 4 * W, 3 ), dtype=np.uint8 )
     
     for i in range( N ):
         idx = i * 3
@@ -59,11 +57,19 @@ def read_and_compose_grid(files):
         img1 = read_image( files[idx+1] )
         img2 = read_image( files[idx+2] )
 
+        img0_3C = make_three_channels(img0)
+        img1_3C = make_three_channels(img1)
+        img2_3C = make_three_channels(img2)
+
         hStart = i * H
         
-        canvas[ hStart:hStart+H,   0:W,   ... ] = img0
-        canvas[ hStart:hStart+H,   W:2*W, ... ] = img1
-        canvas[ hStart:hStart+H, 2*W:3*W, ... ] = img2
+        canvas[ hStart:hStart+H,   0:W,   ... ] = img0_3C
+        canvas[ hStart:hStart+H,   W:2*W, ... ] = img1_3C
+        canvas[ hStart:hStart+H, 2*W:3*W, ... ] = img2_3C
+
+        # Merge to a single RGB image.
+        canvas[ hStart:hStart+H, 3*W:4*W, ... ] = \
+            merge_channels( ( img2, img0, img1 ) ) # The image will be written in BGR order.
 
         # The text.
         caseName = extract_name_from_fn(files[idx])
