@@ -8,6 +8,12 @@ import time
 
 from . import export
 
+def pad_homogeneous_coordinate(x):
+    '''x must be DxN, where D is the dimension of the point 
+    and N is the number of points.'''
+    hc = np.ones( x.shape[1], dtype=x.dtype ).reshape( (1, -1) )
+    return np.concatenate( (x, hc), axis=0 )
+
 @export
 class HomographyTransform(object):
     def __init__(self, hessian=1000):
@@ -70,8 +76,16 @@ class HomographyCpu(object):
         dstKP = np.array( [ kpQ[ m.trainIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
         H, mask = cv2.findHomography( srcKP, dstKP, cv2.RANSAC, 3.0 )
         timeHomography = time.time()
+
+        # Compute the error of the projected keypoints.
+        srcKP = srcKP.reshape((-1, 2)).transpose()
+        srcKP = pad_homogeneous_coordinate(srcKP)
+        proj  = H @ srcKP
+        proj  = proj / proj[-1, :]
+        dstKP = dstKP.reshape((-1, 2)).transpose()
+        diff  = np.sqrt(np.linalg.norm( dstKP - proj[:2, :], axis=0 )).mean()
         
-        return H, goodMatches, timeDetectionAndMatching - timeStart, timeHomography - timeDetectionAndMatching
+        return H, goodMatches, diff, timeDetectionAndMatching - timeStart, timeHomography - timeDetectionAndMatching
 
     @staticmethod
     def scale_homography_matrix( hMat, curShape, oriShape ):

@@ -99,7 +99,7 @@ def process_single(shmName, shape, hgWidth, fn, outDir):
     # Compute the homography.
     # FXM stands for "feature extraction and matching".
     # HG stands for "homography".
-    hMat, goodMatches, timeFXM, timeHG = hg( dstImgR, srcImgR )
+    hMat, goodMatches, diff, timeFXM, timeHG = hg( dstImgR, srcImgR )
 
     # Scale the homography matrix back to original scale.
     hMat = HomographyCpu.scale_homography_matrix( hMat, dstImgR.shape, shape )
@@ -112,7 +112,7 @@ def process_single(shmName, shape, hgWidth, fn, outDir):
     merged = merge_two_single_channels( dstImg, warped )
 
     # Annotate the merged image.
-    annText = 'N: %d, FXM: %3.1fms, HG: %3.1fms' % ( len(goodMatches), timeFXM*1000, timeHG*1000 )
+    annText = 'N: %d, D: %.2f, FXM: %3.1fms, HG: %3.1fms' % ( len(goodMatches), diff, timeFXM*1000, timeHG*1000 )
     (textW, textH), _ = cv2.getTextSize( annText, cv2.FONT_HERSHEY_SIMPLEX, 
             fontScale=2, thickness=2 )
     cv2.putText( merged, annText, ( int(0.1*textW), int(2.5*textH) ), 
@@ -126,7 +126,7 @@ def process_single(shmName, shape, hgWidth, fn, outDir):
     # Write the statistics.
     outFn = compose_filename( 
         os.path.join( outDir, 'stat' ), fn, ext='.csv' )
-    np.savetxt( outFn, [ len(goodMatches), timeFXM, timeHG ], fmt='%f', delimiter=',' )
+    np.savetxt( outFn, [ len(goodMatches), diff, timeFXM, timeHG ], fmt='%f', delimiter=',' )
 
     # Clean up the shared memory.
     shm.close()
@@ -151,8 +151,9 @@ def write_stats(fn, fnList, stats):
     df = pd.DataFrame.from_dict( {
         'source': fnList, 
         'good matches': stats[:, 0], 
-        'feature extraction and matching time (s)': stats[:, 1], 
-        'homography time (s)': stats[:, 2],
+        'reprojection error (pixel)': stats[:, 1],
+        'feature extraction and matching time (s)': stats[:, 2], 
+        'homography time (s)': stats[:, 3],
     } )
 
     # Save the dataframe.
