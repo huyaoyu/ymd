@@ -217,7 +217,7 @@ def main():
         with Pool(args.np) as p:
             p.map( pooled_single, poolArgs )
 
-    print(f'{len(imageFnList)} in total. ')
+    print(f'{nImages} in total. ')
 
     # Gather the statistics.
     statFnList = find_files( statDir, '*.csv' )
