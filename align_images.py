@@ -112,7 +112,7 @@ def process_single(shmName, shape, hgWidth, fn, outDir):
     merged = merge_two_single_channels( dstImg, warped )
 
     # Annotate the merged image.
-    annText = 'N: %d, D: %.2f, FXM: %3.1fms, HG: %3.1fms' % ( len(goodMatches), diff, timeFXM*1000, timeHG*1000 )
+    annText = 'N: %d, D: %.2fpix, FXM: %3.1fms, HG: %3.1fms' % ( len(goodMatches), diff, timeFXM*1000, timeHG*1000 )
     (textW, textH), _ = cv2.getTextSize( annText, cv2.FONT_HERSHEY_SIMPLEX, 
             fontScale=2, thickness=2 )
     cv2.putText( merged, annText, ( int(0.1*textW), int(2.5*textH) ), 
