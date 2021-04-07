@@ -55,10 +55,18 @@ class HomographyTransform(object):
 
 @export
 class HomographyCpu(object):
-    def __init__(self, hessian=1000):
+    def __init__(self, hessian=200):
         super(HomographyCpu, self).__init__()
         self.detector = cv2.xfeatures2d_SURF.create(hessianThreshold=hessian)
         self.matcher  = cv2.BFMatcher(cv2.NORM_L2)
+
+        # Temporary results of the last computation.
+        self.hMat        = None
+        self.hMask       = None
+        self.goodMatches = None
+        self.diff        = None
+        self.timeDetectionAndMatching  = None
+        self.timeHomographyComputation = None
     
     def __call__(self, refImg, tstImg):
         timeStart = time.time()
@@ -85,12 +93,19 @@ class HomographyCpu(object):
             proj  = cv2.perspectiveTransform(srcKP[mask, ...], H)
             diffV = dstKP[mask, ...] - proj
             diff  = np.linalg.norm( diffV.reshape((-1, 2)), axis=1 ).mean()
-            retFlag = True
         else:
             diff = -1
-            retFlag = False
+        
+        self.srcKP       = kpSrc
+        self.dstKP       = kpDst
+        self.hMat        = H
+        self.hMask       = mask
+        self.goodMatches = goodMatches
+        self.diff        = diff
+        self.timeDetectionAndMatching  = timeDetectionAndMatching - timeStart
+        self.timeHomographyComputation = timeHomography - timeDetectionAndMatching
 
-        return retFlag, H, goodMatches, nHomographyMatched, diff, timeDetectionAndMatching - timeStart, timeHomography - timeDetectionAndMatching
+        return H
 
     @staticmethod
     def scale_homography_matrix( hMat, curDstShape, oriDstShape, curSrcShape, oriSrcShape ):

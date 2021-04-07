@@ -75,7 +75,7 @@ def compose_filename(outDir, fn, suffix='', ext='.png'):
     parts = get_filename_parts(fn)
     return os.path.join( outDir, '%s%s%s' % ( parts[1], suffix, ext ) )
 
-def process_single(shmName, shape, hgWidth, fn, outDir, imgExt='.png'):
+def process_single(shmName, shape, hgWidth, fn, outDir, imgExt='.png', flagDrawMatches=False):
     timeStart = time.time()
 
     # Show the input filename.
@@ -96,8 +96,8 @@ def process_single(shmName, shape, hgWidth, fn, outDir, imgExt='.png'):
         dstImgR = blur_resize_by_width( dstImg, hgWidth )
         srcImgR = blur_resize_by_width( srcImg, hgWidth )
 
-        # Binarize.
-        dstImgR, srcImgR = binarize( (dstImgR, srcImgR), thres=50, gf=False )
+        # # Binarize.
+        # dstImgR, srcImgR = binarize( (dstImgR, srcImgR), thres=24, gf=False )
 
         # Create a homography computer.
         hg = HomographyCpu()
@@ -105,10 +105,15 @@ def process_single(shmName, shape, hgWidth, fn, outDir, imgExt='.png'):
         # Compute the homography.
         # FXM stands for "feature extraction and matching".
         # HG stands for "homography".
-        retFlag, hMat, goodMatches, nHomographyMatched, diff, timeFXM, timeHG = \
-            hg( dstImgR, srcImgR )
+        hMat = hg( dstImgR, srcImgR )
 
-        if (retFlag):
+        nGoodMatches       = len(hg.goodMatches)
+        nHomographyMatched = hg.hMask.sum()
+        diff               = hg.diff
+        timeFXM            = hg.timeDetectionAndMatching
+        timeHG             = hg.timeHomographyComputation
+
+        if (hMat is not None):
             # Scale the homography matrix back to original scale.
             hMat = HomographyCpu.scale_homography_matrix( 
                 hMat, dstImgR.shape, dstImg.shape, srcImgR.shape, srcImg.shape )
@@ -122,7 +127,7 @@ def process_single(shmName, shape, hgWidth, fn, outDir, imgExt='.png'):
 
             # Annotate the merged image.
             annText = 'N: %d/%d(%.2f), D: %.2fpix, FXM: %3.1fms, HG: %3.1fms' % \
-                ( nHomographyMatched, len(goodMatches), nHomographyMatched/len(goodMatches), diff, timeFXM*1000, timeHG*1000 )
+                ( nHomographyMatched, nGoodMatches, nHomographyMatched/nGoodMatches, diff, timeFXM*1000, timeHG*1000 )
             (textW, textH), _ = cv2.getTextSize( annText, cv2.FONT_HERSHEY_SIMPLEX, 
                     fontScale=2, thickness=2 )
             cv2.putText( merged, annText, ( int(0.1*textW), int(2.5*textH) ), 
@@ -138,14 +143,36 @@ def process_single(shmName, shape, hgWidth, fn, outDir, imgExt='.png'):
                 os.path.join( outDir, 'stat' ), fn, ext='.csv' )
             np.savetxt( outFn, 
                 [ nHomographyMatched, 
-                len(goodMatches), 
-                nHomographyMatched/len(goodMatches), 
+                nGoodMatches, 
+                nHomographyMatched/nGoodMatches, 
                 diff, 
                 timeFXM, timeHG ], fmt='%f', delimiter=',' )
+
+            # Save the matc hed point to an image.
+            if ( flagDrawMatches ):
+                draw_params = dict(
+                    matchColor = (0,255,0),
+                    singlePointColor = None,
+                    matchesMask = hg.hMask.reshape((-1,)).astype(np.bool).tolist(),
+                    flags = cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+                imgWithMatches = np.empty(
+                    ( max(dstImgR.shape[0], srcImgR.shape[0]), dstImgR.shape[1] + srcImgR.shape[1], 3 ), 
+                    dtype=np.uint8 )
+                # import ipdb; ipdb.set_trace()
+                cv2.drawMatches( 
+                    srcImgR, hg.srcKP, 
+                    dstImgR, hg.dstKP, 
+                    hg.goodMatches, 
+                    imgWithMatches, 
+                    **draw_params )
+
+                outFn = compose_filename( outDir, fn, '_Matches', ext=imgExt )
+                cv2.imwrite( outFn, imgWithMatches )
         else:
             raise Exception('Homography computation failed. ')
     except Exception as e:
         # Write the statistics.
+        print(f'Got exception when computing the homography. \nException: {e}')
         outFn = compose_filename( 
             os.path.join( outDir, 'stat' ), fn, ext='.csv' )
         np.savetxt( outFn, 
@@ -205,6 +232,9 @@ def handle_args():
 
     parser.add_argument('--image-write-ext', type=str, default='.jpg', 
         help='Set this flag to wite compressed JPEG.')
+    
+    parser.add_argument('--draw-matches', action='store_true', default=False, 
+        help='Set this flag to draw the matches. ')
 
     parser.add_argument('--np', type=int, default=2, \
         help='The process number. ')
@@ -239,11 +269,18 @@ def main():
         nImages = min( args.debug, nImages )
         for i in range( 1, nImages ):
             fn = imageFnList[i]
-            process_single( shm.name, img.shape, args.hg_width, fn, args.outdir, args.image_write_ext )
+            process_single( 
+                shm.name, 
+                img.shape, 
+                args.hg_width, 
+                fn, 
+                args.outdir, 
+                args.image_write_ext, 
+                args.draw_matches )
     else:
         # Prepare the arguments.
         poolArgs = [ 
-            [ shm.name, img.shape, args.hg_width, imageFnList[i], args.outdir, args.image_write_ext ] 
+            [ shm.name, img.shape, args.hg_width, imageFnList[i], args.outdir, args.image_write_ext, args.draw_matches ] 
             for i in range( 1, nImages ) ]
         
         with Pool(args.np) as p:
