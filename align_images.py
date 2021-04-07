@@ -11,6 +11,7 @@ import pandas as pd
 import time
 
 from ymd.img_utils.io import read_image
+from ymd.img_utils.binary import binarize
 from ymd.align import HomographyCpu
 
 def get_filename_parts(fn):
@@ -74,7 +75,7 @@ def compose_filename(outDir, fn, suffix='', ext='.png'):
     parts = get_filename_parts(fn)
     return os.path.join( outDir, '%s%s%s' % ( parts[1], suffix, ext ) )
 
-def process_single(shmName, shape, hgWidth, fn, outDir):
+def process_single(shmName, shape, hgWidth, fn, outDir, imgExt='.png'):
     timeStart = time.time()
 
     # Show the input filename.
@@ -85,48 +86,74 @@ def process_single(shmName, shape, hgWidth, fn, outDir):
     dstImg = restore_image_from_shm(shm, shape)
 
     # Read the test/source image.
-    srcImg = read_image(fn)
-    assert( dstImg.shape == srcImg.shape ), \
-        f'dstImg and srcImg have different shapes. dstImg.shape = {dstImg.shape}, srdImg.shape = {srcImg.shape}. '
+    try:
+        srcImg = read_image(fn)
 
-    # Resize.
-    dstImgR = blur_resize_by_width( dstImg, hgWidth )
-    srcImgR = blur_resize_by_width( srcImg, hgWidth )
+        if ( dstImg.shape != srcImg.shape ):
+            print(f'dstImg and srcImg {fn} have different shapes. dstImg.shape = {dstImg.shape}, srdImg.shape = {srcImg.shape}. ' )
 
-    # Create a homography computer.
-    hg = HomographyCpu()
+        # Resize.
+        dstImgR = blur_resize_by_width( dstImg, hgWidth )
+        srcImgR = blur_resize_by_width( srcImg, hgWidth )
 
-    # Compute the homography.
-    # FXM stands for "feature extraction and matching".
-    # HG stands for "homography".
-    hMat, goodMatches, diff, timeFXM, timeHG = hg( dstImgR, srcImgR )
+        # Binarize.
+        dstImgR, srcImgR = binarize( (dstImgR, srcImgR), thres=50, gf=False )
 
-    # Scale the homography matrix back to original scale.
-    hMat = HomographyCpu.scale_homography_matrix( hMat, dstImgR.shape, shape )
+        # Create a homography computer.
+        hg = HomographyCpu()
 
-    # Warp the test/source image.
-    warped = cv2.warpPerspective(
-        srcImg, hMat, ( shape[1], shape[1] ), flags=cv2.INTER_LINEAR)
+        # Compute the homography.
+        # FXM stands for "feature extraction and matching".
+        # HG stands for "homography".
+        retFlag, hMat, goodMatches, nHomographyMatched, diff, timeFXM, timeHG = \
+            hg( dstImgR, srcImgR )
 
-    # Merge the reference/destination and test/source images.
-    merged = merge_two_single_channels( dstImg, warped )
+        if (retFlag):
+            # Scale the homography matrix back to original scale.
+            hMat = HomographyCpu.scale_homography_matrix( 
+                hMat, dstImgR.shape, dstImg.shape, srcImgR.shape, srcImg.shape )
 
-    # Annotate the merged image.
-    annText = 'N: %d, D: %.2fpix, FXM: %3.1fms, HG: %3.1fms' % ( len(goodMatches), diff, timeFXM*1000, timeHG*1000 )
-    (textW, textH), _ = cv2.getTextSize( annText, cv2.FONT_HERSHEY_SIMPLEX, 
-            fontScale=2, thickness=2 )
-    cv2.putText( merged, annText, ( int(0.1*textW), int(2.5*textH) ), 
-        cv2.FONT_HERSHEY_SIMPLEX, 
-        fontScale=2, color=( 0, 0, 255 ), thickness=2)
+            # Warp the test/source image.
+            warped = cv2.warpPerspective(
+                srcImg, hMat, ( shape[1], shape[0] ), flags=cv2.INTER_LINEAR)
 
-    # Write the merged image to the output directory.
-    outFn = compose_filename( outDir, fn, '_Merged' )
-    cv2.imwrite( outFn, merged )
+            # Merge the reference/destination and test/source images.
+            merged = merge_two_single_channels( dstImg, warped )
 
-    # Write the statistics.
-    outFn = compose_filename( 
-        os.path.join( outDir, 'stat' ), fn, ext='.csv' )
-    np.savetxt( outFn, [ len(goodMatches), diff, timeFXM, timeHG ], fmt='%f', delimiter=',' )
+            # Annotate the merged image.
+            annText = 'N: %d/%d(%.2f), D: %.2fpix, FXM: %3.1fms, HG: %3.1fms' % \
+                ( nHomographyMatched, len(goodMatches), nHomographyMatched/len(goodMatches), diff, timeFXM*1000, timeHG*1000 )
+            (textW, textH), _ = cv2.getTextSize( annText, cv2.FONT_HERSHEY_SIMPLEX, 
+                    fontScale=2, thickness=2 )
+            cv2.putText( merged, annText, ( int(0.1*textW), int(2.5*textH) ), 
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                fontScale=2, color=( 0, 0, 255 ), thickness=2)
+
+            # Write the merged image to the output directory.
+            outFn = compose_filename( outDir, fn, '_Merged', ext=imgExt )
+            cv2.imwrite( outFn, merged )
+
+            # Write the statistics.
+            outFn = compose_filename( 
+                os.path.join( outDir, 'stat' ), fn, ext='.csv' )
+            np.savetxt( outFn, 
+                [ nHomographyMatched, 
+                len(goodMatches), 
+                nHomographyMatched/len(goodMatches), 
+                diff, 
+                timeFXM, timeHG ], fmt='%f', delimiter=',' )
+        else:
+            raise Exception('Homography computation failed. ')
+    except Exception as e:
+        # Write the statistics.
+        outFn = compose_filename( 
+            os.path.join( outDir, 'stat' ), fn, ext='.csv' )
+        np.savetxt( outFn, 
+            [ -1, 
+            -1, 
+            -1, 
+            -1, 
+            -1, -1 ], fmt='%f', delimiter=',' )
 
     # Clean up the shared memory.
     shm.close()
@@ -150,10 +177,12 @@ def write_stats(fn, fnList, stats):
     # Create a dataframe.
     df = pd.DataFrame.from_dict( {
         'source': fnList, 
-        'good matches': stats[:, 0], 
-        'reprojection error (pixel)': stats[:, 1],
-        'feature extraction and matching time (s)': stats[:, 2], 
-        'homography time (s)': stats[:, 3],
+        'homography matches': stats[:, 0],
+        'good matches': stats[:, 1],
+        'match ratio': stats[:, 2],
+        'reprojection error (pixel)': stats[:, 3],
+        'feature extraction and matching time (s)': stats[:, 4], 
+        'homography time (s)': stats[:, 5],
     } )
 
     # Save the dataframe.
@@ -173,6 +202,9 @@ def handle_args():
 
     parser.add_argument('--hg-width', type=int, default=512, 
         help='The width of the intermediate image for homography computation. ')
+
+    parser.add_argument('--image-write-ext', type=str, default='.jpg', 
+        help='Set this flag to wite compressed JPEG.')
 
     parser.add_argument('--np', type=int, default=2, \
         help='The process number. ')
@@ -207,11 +239,11 @@ def main():
         nImages = min( args.debug, nImages )
         for i in range( 1, nImages ):
             fn = imageFnList[i]
-            process_single( shm.name, img.shape, args.hg_width, fn, args.outdir )
+            process_single( shm.name, img.shape, args.hg_width, fn, args.outdir, args.image_write_ext )
     else:
         # Prepare the arguments.
         poolArgs = [ 
-            [ shm.name, img.shape, args.hg_width, imageFnList[i], args.outdir ] 
+            [ shm.name, img.shape, args.hg_width, imageFnList[i], args.outdir, args.image_write_ext ] 
             for i in range( 1, nImages ) ]
         
         with Pool(args.np) as p:

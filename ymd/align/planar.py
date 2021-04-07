@@ -25,16 +25,16 @@ class HomographyTransform(object):
     
     def compute_homography(self, refImg, tstImg, r=None):
         # Feature extraction.
-        kpQ, descQ = self.detector.detectAndCompute(refImg, mask=None)
-        kpD, descD = self.detector.detectAndCompute(tstImg, mask=None)
+        kpDst, descDst = self.detector.detectAndCompute(refImg, mask=None)
+        kpSrc, descSrc = self.detector.detectAndCompute(tstImg, mask=None)
 
         # Matching.
-        matches = self.flann.knnMatch( descD, descQ, k=2 )
+        matches = self.flann.knnMatch( descSrc, descDst, k=2 )
         goodMatches = [ m for m, n in matches if m.distance < 0.7 * n.distance ]
 
         # Keypoints.
-        srcKP = np.array( [ kpD[ m.queryIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
-        dstKP = np.array( [ kpQ[ m.trainIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
+        srcKP = np.array( [ kpSrc[ m.queryIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
+        dstKP = np.array( [ kpDst[ m.trainIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
 
         # Ratio.
         if ( r is not None ):
@@ -63,44 +63,53 @@ class HomographyCpu(object):
     def __call__(self, refImg, tstImg):
         timeStart = time.time()
         # Feature extraction.
-        kpQ, descQ = self.detector.detectAndCompute(refImg, mask=None)
-        kpD, descD = self.detector.detectAndCompute(tstImg, mask=None)
+        kpDst, descDst = self.detector.detectAndCompute(refImg, mask=None)
+        kpSrc, descSrc = self.detector.detectAndCompute(tstImg, mask=None)
 
         # Matching.
-        matches = self.matcher.knnMatch( descD, descQ, k=2 )
+        matches = self.matcher.knnMatch( descSrc, descDst, k=2 )
         goodMatches = [ m for m, n in matches if m.distance < 0.7 * n.distance ]
         timeDetectionAndMatching = time.time()
 
         # Homography.
-        srcKP = np.array( [ kpD[ m.queryIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
-        dstKP = np.array( [ kpQ[ m.trainIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
+        srcKP = np.array( [ kpSrc[ m.queryIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
+        dstKP = np.array( [ kpDst[ m.trainIdx ].pt for m in goodMatches ], dtype=np.float32 ).reshape( (-1, 1, 2) )
         H, mask = cv2.findHomography( srcKP, dstKP, cv2.RANSAC, 3.0 )
         timeHomography = time.time()
 
         # Compute the error of the projected keypoints.
-        srcKP = srcKP.reshape((-1, 2)).transpose()
-        srcKP = pad_homogeneous_coordinate(srcKP)
-        proj  = H @ srcKP
-        proj  = proj / proj[-1, :]
-        dstKP = dstKP.reshape((-1, 2)).transpose()
-        diff  = np.sqrt(np.linalg.norm( dstKP - proj[:2, :], axis=0 )).mean()
-        
-        return H, goodMatches, diff, timeDetectionAndMatching - timeStart, timeHomography - timeDetectionAndMatching
+        nHomographyMatched = mask.sum()
+
+        if ( H is not None ):
+            mask  = mask.reshape((-1,)).astype(np.bool)
+            proj  = cv2.perspectiveTransform(srcKP[mask, ...], H)
+            diffV = dstKP[mask, ...] - proj
+            diff  = np.linalg.norm( diffV.reshape((-1, 2)), axis=1 ).mean()
+            retFlag = True
+        else:
+            diff = -1
+            retFlag = False
+
+        return retFlag, H, goodMatches, nHomographyMatched, diff, timeDetectionAndMatching - timeStart, timeHomography - timeDetectionAndMatching
 
     @staticmethod
-    def scale_homography_matrix( hMat, curShape, oriShape ):
-        # Two scale factors.
-        fx = oriShape[1] / curShape[1]
-        fy = oriShape[0] / curShape[0]
+    def scale_homography_matrix( hMat, curDstShape, oriDstShape, curSrcShape, oriSrcShape ):
+        # Two scale factors for the souce image.
+        fx = curSrcShape[1] / oriSrcShape[1]
+        fy = curSrcShape[0] / oriSrcShape[0]
 
-        # The scale matrices.
-        s  = np.eye( 3, dtype=np.float32 )
-        si = s.copy() # Invert of s.
+        # The scale matrix.
+        fSrc = np.eye( 3, dtype=np.float32 )
+        fSrc[0, 0] = fx
+        fSrc[1, 1] = fy
 
-        s[0, 0] = fx
-        s[1, 1] = fy
+        # Two scale factors for the destination image.
+        fx = curDstShape[1] / oriDstShape[1]
+        fy = curDstShape[0] / oriDstShape[0]
 
-        si[0, 0] = 1. / fx
-        si[1, 1] = 1. / fy
+        # The inverse scale matix
+        fDstInv = np.eye( 3, dtype=np.float32 )
+        fDstInv[0, 0] = 1. / fx
+        fDstInv[1, 1] = 1. / fy
 
-        return s @ hMat @ si
+        return fDstInv @ hMat @ fSrc
